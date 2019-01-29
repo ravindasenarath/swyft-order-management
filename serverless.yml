@@ -1,0 +1,85 @@
+service: swyft-order-management
+
+iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "sqs:SendMessage"
+        - "sqs:GetQueueUrl"
+      Resource: "arn:aws:sqs:${self:provider.region}:561272682546:SwyftOrderQueue"
+    - Effect: "Allow"
+      Action:
+        - "sqs:ListQueues"
+      Resource: "arn:aws:sqs:${self:provider.region}:561272682546:*"
+      method: get
+  
+functions:
+  sender:
+    handler: sender.handler
+    events:
+      - http:
+          path: orders
+          method: post
+  receiver:
+    handler: receiver.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - SwyftOrderQueue
+              - Arn
+  initial:
+    handler: handler.initial
+  processTax:
+    handler: handler.processTax
+  process-approval:
+    handler: handler.processApproval
+
+stepFunctions:
+  stateMachines:
+    OrderStateMachine:
+      name: OrderStateMachine
+      definition:
+        StartAt: INITIAL
+        States:
+          INITIAL:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-initial"
+            Next: PROCESS_TAX
+          PROCESS_TAX:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-processTax"
+            Next: CHECK_APPROVAL
+          CHECK_APPROVAL:
+            Type: Choice
+            Choices:
+            - Variable: "$.amount"
+              NumericGreaterThan: 100000
+              Next: PROCESS_APPROVAL
+            - Variable: "$.type"
+              NumericLessThan: 2
+              Next: COMPLETE
+            End: false
+          PROCESS_APPROVAL:
+            Type: Wait
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-processApproval"
+            End: false
+          COMPLETE:
+            Type: Succeed
+            End: true
+
+resources:
+  Resources:
+    SwyftOrderQueue:
+      Type: "AWS::SQS::Queue"
+      Properties:
+        QueueName: "SwyftOrderQueue"
+  Outputs:
+    OrderStateMachine:
+      Description: TEST
+      Value:
+          Ref: OrderStateMachine
+
+# adding these two lines
+plugins:
+  - serverless-offline
+  - serverless-step-functions
